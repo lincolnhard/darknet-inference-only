@@ -19,43 +19,17 @@ void objdetect_init
     //0. initialize stack
     init_stack();
     //1. initialize detector, fill in options
-    objdet_info = (objdetect_struct*)alloc_from_stack
-            (sizeof(objdetect_struct));
+    objdet_info = (objdetect_struct*)alloc_from_stack(sizeof(objdetect_struct));
     objdet_info->thresh = 0.24f;
     objdet_info->nms_thresh = 0.3f;
-    objdet_info->class_num = 20; // voc-pascal dataset
-    char* class_names[] = {
-                         "aeroplane",
-                         "bicycle",
-                         "bird",
-                         "boat",
-                         "bottle",
-                         "bus",
-                         "car",
-                         "cat",
-                         "chair",
-                         "cow",
-                         "diningtable",
-                         "dog",
-                         "horse",
-                         "motorbike",
-                         "person",
-                         "pottedplant",
-                         "sheep",
-                         "sofa",
-                         "train",
-                         "tvmonitor"
-                         };
-    objdet_info->names = class_names;
+    objdet_info->class_num = 20; // voc-pascal dataset [aeroplane, bicycle, ..], note person is idx #14
 
     //2. initialize net
     objdet_info->net.n = 16; // darknet reference network
-    objdet_info->net.layers = (layer_struct*)alloc_from_stack
-            (objdet_info->net.n * sizeof(layer_struct));
+    objdet_info->net.layers = (layer_struct*)alloc_from_stack(objdet_info->net.n * sizeof(layer_struct));
     objdet_info->net.w = 416;
     objdet_info->net.h = 416;
     objdet_info->net.c = 3;
-    //objdet_info->net.inputs = objdet_info->net.w * objdet_info->net.h * objdet_info->net.c;
 
     //3. load weights file
     FILE *fp = fopen(weight_file_path, "rb");
@@ -462,23 +436,30 @@ void objdetect_init
     fclose(fp);
 }
 
-void objdetect_main
+int *objdetect_main
     (
     unsigned char *im,
     int imw,
     int imh
     )
 {
+    unsigned int marksize = get_stack_current_alloc_size();
     objdet_info->src = im;
     objdet_info->srcw = imw;
     objdet_info->srch = imh;
+    // resize and convert to float32
     objdet_info->net.input = preprocessed(objdet_info);
+    // set zero number of people detected
+    objdet_info->output[0] = 0;
 
     double time = what_time_is_it_now();
     network_predict(objdet_info->net);
-    printf("Predicted in %f seconds.\n", what_time_is_it_now()-time);
+    printf("Predicted in %f seconds.\n", what_time_is_it_now() - time);
 
     get_region_boxes(objdet_info);
     nonmax_suppression(objdet_info);
-    draw_result(objdet_info);
+    person_detection(objdet_info);
+    clear_network(objdet_info->net);
+    reset_stack_ptr_to_assigned_position(marksize);
+    return objdet_info->output;
 }

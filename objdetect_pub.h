@@ -11,7 +11,7 @@ void objdetect_init
     char *weight_file_path
     );
 
-void objdetect_main
+int *objdetect_main
     (
     unsigned char *src,
     int srcw,

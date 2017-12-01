@@ -1,4 +1,5 @@
 #include "objdetect_prv.h"
+#include <omp.h>
 
 void softmax
     (
@@ -100,7 +101,8 @@ void add_bias
     int size
     )
 {
-    int i,j;
+    int i = 0;
+    int j = 0;
     for(i = 0; i < n; ++i)
         {
         for(j = 0; j < size; ++j)
@@ -118,7 +120,8 @@ void scale_bias
     int size
     )
 {
-    int i,j;
+    int i = 0;
+    int j = 0;
     for(i = 0; i < n; ++i)
         {
         for(j = 0; j < size; ++j)
@@ -137,7 +140,8 @@ void batch_normalize
     int spatial
     )
 {
-    int f, i;
+    int f = 0;
+    int i = 0;
     for(f = 0; f < filters; ++f)
         {
         for(i = 0; i < spatial; ++i)
@@ -160,7 +164,7 @@ void gemm
     )
 {
     int i,j,k;
-    //#pragma omp parallel for
+    #pragma omp parallel for
     for(i = 0; i < M; ++i)
         {
         for(k = 0; k < K; ++k)
@@ -242,8 +246,9 @@ void forward_convolutional_layer
     float *c = l.output;
     im2col(net.input, l.c, l.h, l.w, l.size, l.pad, b);
     gemm(m, n, k, a, b, c);
-    if(l.size != 1) // no batch normalization for last convolution layer
+    if(l.size != 1) // size 1 convolution layer mean fully-connected layer
         {
+        // normalized by the training sample mean, variance and scales
         batch_normalize(c, l.rolling_mean, l.rolling_variance, l.out_c, n);
         scale_bias(c, l.scales, l.out_c, n);
         }
@@ -438,7 +443,7 @@ float* preprocessed
             for(c = 0; c < neww; ++c)
                 {
                 float val = resizeimbuf[k*neww*newh + r*neww + c];
-                boxim[k*netw*neth + (dy+r)*netw + dx+c] = val;
+                boxim[k*netw*neth + (dy+r)*netw + dx + c] = val;
                 }
             }
         }
@@ -458,7 +463,7 @@ void network_predict
         layer_struct l = net.layers[i];
         l.forward(l, net);
         net.input = l.output;
-        }  
+        }
 }
 
 void get_region_boxes
@@ -514,16 +519,16 @@ void get_region_boxes
         for(n = 0; n < group_num; ++n)
             {
             int index = n*outsize + i;
-            for(j = 0; j < class_num; ++j)
-                {
-                probs[index][j] = 0.0f;
-                }
             float scale = predictions[obj_idx];
+            float maxp = 0;
             boxes[index].x = (col + predictions[box_idx]) / outw;
             boxes[index].y = (row + predictions[box_idx + outsize]) / outh;
             boxes[index].w = exp(predictions[box_idx + (outsize << 1)]) * biases[2 * n] / outw;
             boxes[index].h = exp(predictions[box_idx + (outsize * 3)]) * biases[2 * n + 1] / outh;
-            float maxp = 0;
+            for(j = 0; j < class_num; ++j)
+                {
+                probs[index][j] = 0.0f;
+                }
             for(j = 0; j < class_num; ++j)
                 {
                 float prob = scale * predictions[cls_idx];
@@ -636,6 +641,7 @@ void nonmax_suppression
         s[i].class_num = classes;
         s[i].probs = probs;
         }
+    // after sorting: probs[s[0].index][classes] > probs[s[1].index][classes] > ...
     qsort(s, total, sizeof(sortable_bbox), nms_comparator);
     //non maximum suppression
     for(i = 0; i < total; ++i)
@@ -717,5 +723,81 @@ void draw_result
             memset(src + 3 * (top * srcw + left), 125, 3 * (right - left));
             memset(src + 3 * (bot * srcw + left), 125, 3 * (right - left));
             }
+        }
+}
+
+void person_detection
+    (
+    objdetect_struct* objdet_wksp
+    )
+{
+    layer_struct l = objdet_wksp->net.layers[objdet_wksp->net.n - 1];
+    box_struct *boxes = objdet_wksp->net.result_boxes;
+    float **probs = objdet_wksp->net.result_probs;
+    int total = l.w * l.h * l.n;
+    int classes = objdet_wksp->class_num;
+    float thresh = objdet_wksp->thresh;
+    int srcw = objdet_wksp->srcw;
+    int srch = objdet_wksp->srch;
+    int i = 0;
+    int j = 0;
+    int count = 0;
+    for(i = 0; i < total; ++i)
+        {
+        float *p = probs[i];
+        float maxp = p[0];
+        int max_cls_idx = 0;
+        for(j = 1; j < classes; ++j)
+            {
+            if(p[j] > maxp)
+                {
+                maxp = p[j];
+                max_cls_idx = j;
+                }
+            }
+        float prob = p[max_cls_idx];
+        if(prob > thresh && max_cls_idx == PERSON_IDX_IN_VOC)
+            {
+            box_struct b = boxes[i];
+            int left  = (b.x - b.w/2.) * srcw;
+            int right = (b.x + b.w/2.) * srcw;
+            int top   = (b.y - b.h/2.) * srch;
+            int bot   = (b.y + b.h/2.) * srch;
+            if(left < 0)
+                {
+                left = 0;
+                }
+            if(right > srcw - 1)
+                {
+                right = srcw-1;
+                }
+            if(top < 0)
+                {
+                top = 0;
+                }
+            if(bot > srch - 1)
+                {
+                bot = srch-1;
+                }
+            objdet_wksp->output[count*4+1] = left;
+            objdet_wksp->output[count*4+2] = top;
+            objdet_wksp->output[count*4+3] = right - left;
+            objdet_wksp->output[count*4+4] = bot - top;
+            ++count;
+            }
+        }
+    objdet_wksp->output[0] = count;
+}
+
+void clear_network
+    (
+    network_struct net
+    )
+{
+    int i = 0;
+    for(i = 0; i < net.n; ++i)
+        {
+        layer_struct l = net.layers[i];
+        memset(l.output, 0, l.outputs * sizeof(float));
         }
 }

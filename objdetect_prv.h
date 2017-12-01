@@ -3,6 +3,8 @@
 
 #include "utils.h"
 
+#define PERSON_IDX_IN_VOC 14
+
 struct layerst;
 typedef struct layerst layer_struct;
 struct networkst;
@@ -54,8 +56,7 @@ struct networkst
     int h; // input image height
     int w; // input image width
     int c; // input image channels
-    //int inputs; // input total pixels
-    float *input; // input src
+    float *input; // input src (note it will be the buffer for every layer's input)
     layer_struct *layers; //pointer to each layer
     box_struct *result_boxes;
     float **result_probs;
@@ -64,13 +65,13 @@ struct networkst
 typedef struct
     {
     int class_num;
-    char** names;
     float thresh;
     float nms_thresh;
     network_struct net;
     unsigned char* src;
     int srcw;
     int srch;
+    int output[401]; // TODO: remove hard coded number here ([0]: count, [rest]: obj box)
     }objdetect_struct;
 
 void forward_convolutional_layer
@@ -138,6 +139,16 @@ void nonmax_suppression
 void draw_result
     (
     objdetect_struct* objdet_wksp
+    );
+
+void person_detection
+    (
+    objdetect_struct* objdet_wksp
+    );
+
+void clear_network
+    (
+    network_struct net
     );
 
 #endif // OBJDETECT_PRV_H
